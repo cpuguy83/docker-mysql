@@ -1,0 +1,69 @@
+#!/bin/bash
+
+if [[ -z $MYSQL_USER ]]; then
+  MYSQL_USER=root
+fi
+
+if [[ -z $MYSQL_PASS ]]; then
+  MYSQL_PASS=mypass
+fi
+
+if [[ ! -z $MASTER_PORT_3306_TCP_ADDR ]] && [[ ! -f /var/lib/mysql/save_set ]]; then
+  if [[ -z $MASTER_USER ]]; then
+    export MASTER_USER=replication
+  fi
+
+  if [[ -z $MASTER_PASS ]]; then
+    export MASTER_PASS=replpass
+  fi
+
+  if [[ -z $MASTER_LOG_FILE ]]; then
+    echo "Must provied master log file from SHOW MASTER STATUS"
+    exit 1
+  fi
+
+  if [[ -z $MASTER_LOG_POSITION ]]; then
+    echo "Must provide master log position from SHOW MASTER STATUS"
+    exit 1
+  fi
+
+  if [[ -z $SERVER_ID ]]; then
+    SERVER_ID=2
+  fi
+
+  if [[ ! -f /etc/mysql/conf.d/server_id.cnf ]]; then
+    echo -e "[mysqld]\nserver-id=${SERVER_ID}" > /etc/mysql/conf.d/server_id.cnf
+  fi
+
+  /usr/sbin/mysqld &
+  sleep 3
+  echo "CHANGE MASTER TO MASTER_HOST='$MASTER_PORT_3306_TCP_ADDR',MASTER_USER='$MASTER_USER', MASTER_PASSWORD='$MASTER_PASS', MASTER_LOG_FILE='$MASTER_LOG_FILE', MASTER_LOG_POS=$MASTER_LOG_POSITION;" | mysql
+  touch /var/lib/mysql/slave_set
+  kill $(pidof mysqld)
+  sleep 3
+else
+  if [[ -z $SERVER_ID ]]; then
+    SERVER_ID=1
+  fi
+  if [[ ! -f /etc/mysql/conf.d/server_id.cnf ]]; then
+    echo -e "[mysqld]\nserver-id=${SERVER_ID}" > /etc/mysql/conf.d/server_id.cnf
+  fi
+
+fi
+
+if [[ ! -f /var/lib/mysql/pass_set ]]; then
+  /usr/sbin/mysqld &
+  sleep 3
+  echo "Setting password for ${MYSQL_USER}"
+  echo "GRANT ALL ON *.* TO ${MYSQL_USER}@'%' IDENTIFIED BY '${MYSQL_PASS}' WITH GRANT OPTION; FLUSH PRIVILEGES" | mysql
+  touch /var/lib/mysql/pass_set
+  kill $(pidof mysqld)
+  sleep 3
+fi
+
+# Work around issue with Docker CMD args being wrong
+if [[ "${@}" =~ ^-- ]]; then
+  args="${@}"
+fi
+
+exec /usr/bin/mysqld_safe --max-allowed-packet=1024M --log-bin=/var/log/mysql/mysql-bin.log --relay-log=/var/log/mysql/mysql-relay-bin.log $args
